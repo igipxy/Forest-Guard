@@ -3,29 +3,17 @@
 import React, { useMemo, useState } from 'react';
 import {
   CameraDevice,
+  ContributingFactor,
   DailyFireRiskReport,
-  RuleBasedFireRiskModel,
+  FireRiskPrediction,
   SystemAlert,
   SystemLogEntry,
   UserRole,
   WeatherData,
 } from '@fire-monitoring/shared';
+import { RuleBasedFireRiskModel } from '@/services/fire-risk.service';
 import { HlsVideoPlayer } from '@/components/camera/HlsVideoPlayer';
-import {
-  Activity,
-  AlertTriangle,
-  Camera,
-  CloudRain,
-  FileText,
-  Flame,
-  Plus,
-  RefreshCw,
-  Settings,
-  Shield,
-  Terminal,
-  Wifi,
-  WifiOff,
-} from 'lucide-react';
+import { Flame, Plus } from 'lucide-react';
 
 type ModuleTab =
   | 'Overview'
@@ -37,7 +25,7 @@ type ModuleTab =
   | 'System Logs'
   | 'Settings';
 
-const MODULES: ModuleTab[] = [
+const MODULES: readonly ModuleTab[] = [
   'Overview',
   'Weather Monitoring',
   'Live Cameras',
@@ -48,53 +36,7 @@ const MODULES: ModuleTab[] = [
   'Settings',
 ];
 
-function computeFactorRisk(weather: WeatherData, dryDays: number) {
-  const tempVal = weather.temperatureC ?? 30;
-  const humVal = weather.humidityPct ?? 45;
-  const windVal = weather.windSpeedKmh ?? 20;
-  const uvVal = weather.uvIndex ?? 7;
-  const rainVal = weather.precipitationMm ?? 0;
-
-  const tempScore = Math.round(Math.min(100, Math.max(0, ((tempVal - 20) / 22) * 100)) * 0.25);
-  const humScore = Math.round(Math.min(100, Math.max(0, ((85 - humVal) / 70) * 100)) * 0.25);
-  const windScore = Math.round(Math.min(100, Math.max(0, (windVal / 45) * 100)) * 0.2);
-  const rainDamp = rainVal > 2 ? 0.25 : 1;
-  const droughtScore = Math.round(
-    Math.min(100, Math.max(0, (dryDays / 14) * 100)) * rainDamp * 0.2
-  );
-  const uvScore = Math.round(Math.min(100, Math.max(0, (uvVal / 11) * 100)) * 0.1);
-
-  const riskScore = Math.min(
-    100,
-    Math.max(0, tempScore + humScore + windScore + droughtScore + uvScore)
-  );
-  const classification =
-    riskScore <= 20
-      ? 'VERY_LOW'
-      : riskScore <= 40
-      ? 'LOW'
-      : riskScore <= 60
-      ? 'MODERATE'
-      : riskScore <= 80
-      ? 'HIGH'
-      : 'EXTREME';
-
-  return {
-    riskScore,
-    classification,
-    factors: [
-      { name: 'Ambient Temperature (25%)', value: `${tempVal.toFixed(1)} °C`, score: tempScore },
-      { name: 'Relative Humidity (25%)', value: `${humVal.toFixed(1)}%`, score: humScore },
-      { name: 'Wind Speed (20%)', value: `${windVal.toFixed(1)} km/h`, score: windScore },
-      { name: 'Dry Spell Duration (20%)', value: `${dryDays} days`, score: droughtScore },
-      {
-        name: 'UV Index (10%)',
-        value: weather.uvIndex !== null ? `UV ${uvVal.toFixed(1)}` : 'Unavailable',
-        score: uvScore,
-      },
-    ],
-  };
-}
+const fireRiskModel = new RuleBasedFireRiskModel();
 
 export default function MonitoringCenterShell(): React.JSX.Element {
   const [activeModule, setActiveModule] = useState<ModuleTab>('Overview');
@@ -107,7 +49,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
     locationName: 'Malang Highland Sector A',
     temperatureC: 31.8,
     windSpeedKmh: 21.4,
-    pressureHpa: null, // Not provided by public BMKG prakiraan-cuaca
+    pressureHpa: null,
     uvIndex: null,
     solarRadiationWm2: null,
     precipitationMm: 0.0,
@@ -173,11 +115,11 @@ export default function MonitoringCenterShell(): React.JSX.Element {
     },
   ]);
 
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [newCamName, setNewCamName] = useState('');
-  const [newCamCode, setNewCamCode] = useState('');
-  const [newCamLocation, setNewCamLocation] = useState('');
-  const [newCamUrl, setNewCamUrl] = useState(
+  const [showRegisterModal, setShowRegisterModal] = useState<boolean>(false);
+  const [newCamName, setNewCamName] = useState<string>('');
+  const [newCamCode, setNewCamCode] = useState<string>('');
+  const [newCamLocation, setNewCamLocation] = useState<string>('');
+  const [newCamUrl] = useState<string>(
     'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'
   );
 
@@ -196,11 +138,14 @@ export default function MonitoringCenterShell(): React.JSX.Element {
       relatedCameraId: 'cam-02',
       isRead: false,
       acknowledged: false,
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+      resolvedAt: null,
       createdAt: new Date().toISOString(),
     },
   ]);
 
-  const [logs, setLogs] = useState<SystemLogEntry[]>([
+  const [logs] = useState<SystemLogEntry[]>([
     {
       id: 'log-init-1',
       timestamp: new Date().toISOString(),
@@ -240,8 +185,9 @@ export default function MonitoringCenterShell(): React.JSX.Element {
     },
   ]);
 
-  const riskSummary = useMemo(
-    () => computeFactorRisk(weather, dryDays),
+  // Evaluate fire susceptibility using the canonical RuleBasedFireRiskModel
+  const riskPrediction: Omit<FireRiskPrediction, 'id' | 'predictedAt'> = useMemo(
+    () => fireRiskModel.evaluate(weather, dryDays),
     [weather, dryDays]
   );
 
@@ -267,7 +213,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
       updatedAt: new Date().toISOString(),
     };
 
-    setCameras((prev) => [created, ...prev]);
+    setCameras((prev: CameraDevice[]) => [created, ...prev]);
     setShowRegisterModal(false);
     setNewCamName('');
     setNewCamCode('');
@@ -279,8 +225,8 @@ export default function MonitoringCenterShell(): React.JSX.Element {
     nextStatus: 'ONLINE' | 'OFFLINE',
     nextStreamStatus: 'PLAYABLE' | 'UNAVAILABLE'
   ): void => {
-    setCameras((prev) =>
-      prev.map((c) => {
+    setCameras((prev: CameraDevice[]) =>
+      prev.map((c: CameraDevice): CameraDevice => {
         if (c.code !== code) return c;
         const isPlayable = nextStatus === 'ONLINE' && nextStreamStatus === 'PLAYABLE';
         return {
@@ -308,7 +254,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
 
   const triggerExtremeDrySpell = (): void => {
     setDryDays(14);
-    setWeather((prev) => ({
+    setWeather((prev: WeatherData): WeatherData => ({
       ...prev,
       temperatureC: 40.5,
       humidityPct: 19.0,
@@ -332,16 +278,20 @@ export default function MonitoringCenterShell(): React.JSX.Element {
       description:
         'Heuristic environmental susceptibility reached EXTREME (40.5°C, 19% humidity, 14 dry days).',
       location: 'Sector A & Sector B',
+      relatedCameraId: null,
       isRead: false,
       acknowledged: false,
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+      resolvedAt: null,
       createdAt: new Date().toISOString(),
     };
-    setAlerts((prev) => [extremeAlert, ...prev]);
+    setAlerts((prev: SystemAlert[]) => [extremeAlert, ...prev]);
   };
 
   const acknowledgeAlert = (id: string): void => {
-    setAlerts((prev) =>
-      prev.map((a) =>
+    setAlerts((prev: SystemAlert[]) =>
+      prev.map((a: SystemAlert): SystemAlert =>
         a.id === id
           ? {
               ...a,
@@ -366,11 +316,11 @@ export default function MonitoringCenterShell(): React.JSX.Element {
       totalPrecipitationMm: weather.precipitationMm,
       avgHumidityPct: weather.humidityPct,
       lastRainfallAt: weather.lastRainfallAt,
-      dailyRiskScore: riskSummary.riskScore,
-      riskClassification: riskSummary.classification,
+      dailyRiskScore: riskPrediction.riskScore,
+      riskClassification: riskPrediction.classification,
       highestRiskPeriod: '13:30 - 15:30 WIB',
-      vulnerableAreas: ['Sector A - North Pine Ridge', 'Sector B - Savanna Basin'],
-      riskFactorAnalysis: `Environmental Susceptibility Report generated for ${today}: Risk score ${riskSummary.riskScore}/100 (${riskSummary.classification}).`,
+      vulnerableAreas: riskPrediction.vulnerableAreas,
+      riskFactorAnalysis: `Environmental Susceptibility Report generated for ${today}: Risk score ${riskPrediction.riskScore}/100 (${riskPrediction.classification}).`,
       recommendedActions: [
         'Deploy patrol observation on high-susceptibility sectors.',
         'Confirm HLS stream playability across all online towers.',
@@ -378,11 +328,11 @@ export default function MonitoringCenterShell(): React.JSX.Element {
       recordCount: 8,
       generatedAt: new Date().toISOString(),
     };
-    setReports((prev) => [createdReport, ...prev]);
+    setReports((prev: DailyFireRiskReport[]) => [createdReport, ...prev]);
   };
 
-  const onlineCamerasCount = cameras.filter((c) => c.status === 'ONLINE').length;
-  const offlineCamerasCount = cameras.filter((c) => c.status === 'OFFLINE').length;
+  const onlineCamerasCount = cameras.filter((c: CameraDevice) => c.status === 'ONLINE').length;
+  const offlineCamerasCount = cameras.filter((c: CameraDevice) => c.status === 'OFFLINE').length;
 
   return (
     <div className="flex min-h-screen bg-[#0B1220] text-[#F8FAFC]">
@@ -399,7 +349,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
         </div>
 
         <nav className="space-y-1">
-          {MODULES.map((mod) => (
+          {MODULES.map((mod: ModuleTab) => (
             <button
               key={mod}
               type="button"
@@ -413,7 +363,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
               <span>{mod}</span>
               {mod === 'Alerts & Notifications' && (
                 <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] text-red-400">
-                  {alerts.filter((a) => a.status === 'CREATED').length}
+                  {alerts.filter((a: SystemAlert) => a.status === 'CREATED').length}
                 </span>
               )}
             </button>
@@ -438,7 +388,9 @@ export default function MonitoringCenterShell(): React.JSX.Element {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setRole((r) => (r === 'OPERATOR' ? 'ADMIN' : 'OPERATOR'))}
+              onClick={() =>
+                setRole((r: UserRole) => (r === 'OPERATOR' ? 'ADMIN' : 'OPERATOR'))
+              }
               className="rounded border border-slate-700 bg-[#172033] px-3 py-1.5 text-xs font-semibold text-slate-200"
             >
               Role: {role}
@@ -452,18 +404,22 @@ export default function MonitoringCenterShell(): React.JSX.Element {
             <div className="rounded-xl border border-slate-800 bg-[#172033] p-4">
               <p className="text-xs text-slate-400">Ambient Temperature</p>
               <p className="mt-1 text-2xl font-bold text-slate-100">
-                {weather.temperatureC !== null ? `${weather.temperatureC.toFixed(1)} °C` : 'Unavailable'}
+                {weather.temperatureC !== null
+                  ? `${weather.temperatureC.toFixed(1)} °C`
+                  : 'Unavailable'}
               </p>
               <p className="mt-1 text-[11px] text-slate-400">
                 Humidity:{' '}
-                {weather.humidityPct !== null ? `${weather.humidityPct.toFixed(1)}%` : 'Unavailable'}
+                {weather.humidityPct !== null
+                  ? `${weather.humidityPct.toFixed(1)}%`
+                  : 'Unavailable'}
               </p>
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-[#172033] p-4">
               <p className="text-xs text-slate-400">Susceptibility Score</p>
               <p className="mt-1 text-2xl font-bold text-[#F59E0B]">
-                {riskSummary.riskScore}/100 ({riskSummary.classification})
+                {riskPrediction.riskScore}/100 ({riskPrediction.classification})
               </p>
               <p className="mt-1 text-[11px] text-slate-400">
                 Weather-Based Indicator (Not Confirmed Fire)
@@ -569,7 +525,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
               )}
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                {cameras.map((cam) => (
+                {cameras.map((cam: CameraDevice) => (
                   <div
                     key={cam.id}
                     className="rounded-lg border border-slate-800 bg-[#111827] p-3"
@@ -643,21 +599,22 @@ export default function MonitoringCenterShell(): React.JSX.Element {
           {activeModule === 'Fire Risk Analysis' && (
             <section className="rounded-xl border border-slate-800 bg-[#172033] p-5">
               <h2 className="text-sm font-bold text-slate-100">
-                Weighted Heuristic Fire Susceptibility Breakdown
+                Weighted Heuristic Fire Susceptibility Breakdown ({riskPrediction.modelVersion})
               </h2>
-              <p className="mt-1 text-xs text-amber-300">
-                Disclaimer: This score measures weather-based environmental susceptibility, NOT
-                confirmed fire detection.
-              </p>
+              <p className="mt-1 text-xs text-amber-300">{riskPrediction.disclaimer}</p>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
-                {riskSummary.factors.map((f) => (
+                {riskPrediction.contributingFactors.map((f: ContributingFactor) => (
                   <div
-                    key={f.name}
+                    key={f.parameter}
                     className="rounded-lg border border-slate-800 bg-[#111827] p-3"
                   >
-                    <p className="text-xs text-slate-400">{f.name}</p>
+                    <p className="text-xs text-slate-400">
+                      {f.parameter} ({Math.round(f.weight * 100)}%)
+                    </p>
                     <p className="mt-1 text-sm font-bold text-slate-100">{f.value}</p>
-                    <p className="mt-1 text-xs text-[#38BDF8]">+{f.score} pts</p>
+                    <p className="mt-1 text-xs text-[#38BDF8]">
+                      +{f.contributionScore} pts ({f.impactLevel})
+                    </p>
                   </div>
                 ))}
               </div>
@@ -680,7 +637,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
                 </button>
               </div>
               <div className="space-y-3">
-                {reports.map((rep) => (
+                {reports.map((rep: DailyFireRiskReport) => (
                   <div
                     key={rep.id}
                     className="rounded-lg border border-slate-800 bg-[#111827] p-4"
@@ -703,7 +660,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
                 Real-Time Alerts (Lifecycle: CREATED → ACKNOWLEDGED → RESOLVED)
               </h2>
               <div className="space-y-2.5">
-                {alerts.map((alt) => (
+                {alerts.map((alt: SystemAlert) => (
                   <div
                     key={alt.id}
                     className="flex items-center justify-between rounded-lg border border-slate-800 bg-[#111827] p-3"
@@ -742,7 +699,7 @@ export default function MonitoringCenterShell(): React.JSX.Element {
                 System Logs (Active RBAC Role: {role})
               </h2>
               <div className="space-y-2">
-                {logs.map((log) => (
+                {logs.map((log: SystemLogEntry) => (
                   <div
                     key={log.id}
                     className="rounded-lg border border-slate-800 bg-[#111827] p-3 text-xs"
