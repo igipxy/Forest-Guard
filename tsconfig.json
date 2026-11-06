@@ -5,14 +5,13 @@
     "paths": {
       "@fire-monitoring/shared": ["./packages/shared/index.ts"],
       "@/*": ["./apps/monitoring-dashboard/*"]
-    },
-    "types": ["node"]
+    }
   },
   "include": [
     "vitest.config.ts",
     "playwright.config.ts",
-    "packages/shared/**/*.ts",
+    "packages/shared/index.ts",
     "tests/**/*.ts"
   ],
-  "exclude": ["node_modules", "**/dist", "**/.next"]
+  "exclude": ["node_modules", "apps", "**/dist", "**/.next"]
 }
