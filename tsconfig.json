@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@fire-monitoring/shared": ["./packages/shared/index.ts"],
+      "@/*": ["./apps/monitoring-dashboard/*"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "packages/shared/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": ["node_modules", "**/dist", "**/.next"]
+}

@@ -1,19 +1,19 @@
-import { cameraEventBus } from '@/services/camera-registry.service';
+import { cameraEventBus, CameraSseEvent } from '@/services/camera-registry.service';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
   const encoder = new TextEncoder();
 
-  const stream = new ReadableStream({
+  const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const sendEvent = (data: unknown) => {
+      const sendEvent = (data: unknown): void => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
       sendEvent({ type: 'SSE_CONNECTED', timestamp: new Date().toISOString() });
 
-      const unsubscribe = cameraEventBus.subscribe((event) => {
+      const unsubscribe = cameraEventBus.subscribe((event: CameraSseEvent) => {
         sendEvent(event);
       });
 
@@ -34,7 +34,8 @@ export async function GET(request: Request) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+      'Access-Control-Allow-Origin':
+        process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
     },
   });
 }

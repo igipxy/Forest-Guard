@@ -1,57 +1,37 @@
 import { NextResponse } from 'next/server';
-import { CameraCreateSchema } from '@fire-monitoring/shared';
-import { StreamProbeService } from '@/services/stream-probe.service';
+import { CameraUpdateSchema } from '@fire-monitoring/shared';
+import { verifyInternalApiKey } from '@/lib/m2m-auth';
+import { CameraRegistryService } from '@/services/camera-registry.service';
 
-function verifyInternalApiKey(request: Request): boolean {
-  const configuredSecret = process.env.CAMERA_API_SECRET;
-  if (!configuredSecret) return true; // Local dev fallback when secret is unset
-  const headerKey = request.headers.get('X-Internal-Api-Key');
-  return headerKey === configuredSecret;
-}
+const registry = new CameraRegistryService();
 
-export async function GET(request: Request) {
-  if (!verifyInternalApiKey(request)) {
-    return NextResponse.json(
-      { error: 'UNAUTHORIZED', message: 'Invalid X-Internal-Api-Key header' },
-      { status: 401 }
-    );
+export async function GET(
+  request: Request,
+  { params }: { params: { id: string } }
+): Promise<NextResponse> {
+  const auth = verifyInternalApiKey(request);
+  if (!auth.authorized) {
+    return NextResponse.json({ error: 'UNAUTHORIZED', message: auth.reason }, { status: 401 });
   }
 
-  // Returns camera inventory with separated operational status & stream status
-  return NextResponse.json({
-    syncedAt: new Date().toISOString(),
-    cameras: [
-      {
-        id: 'cam-01',
-        name: 'Tower Alpha - North Pine Ridge',
-        code: 'CCTV-MLG-01',
-        location: 'Sector A - North Pine Ridge',
-        status: 'ONLINE',
-        streamStatus: 'PLAYABLE',
-        streamPlayable: true,
-        streamProtocol: 'HLS',
-        streamUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-        isDemoStream: true,
-        lastHeartbeatAt: new Date().toISOString(),
-        lastConnectedAt: new Date(Date.now() - 3600000 * 8).toISOString(),
-        errorStatus: 'NONE',
-        errorMessage: null,
-        updatedAt: new Date().toISOString(),
-      },
-    ],
-  });
+  const camera = await registry.getCameraById(params.id);
+  if (!camera) {
+    return NextResponse.json({ error: 'NOT_FOUND', message: 'Camera not found' }, { status: 404 });
+  }
+  return NextResponse.json(camera);
 }
 
-export async function POST(request: Request) {
-  if (!verifyInternalApiKey(request)) {
-    return NextResponse.json(
-      { error: 'UNAUTHORIZED', message: 'Invalid X-Internal-Api-Key header' },
-      { status: 401 }
-    );
+export async function PATCH(
+  request: Request,
+  { params }: { params: { id: string } }
+): Promise<NextResponse> {
+  const auth = verifyInternalApiKey(request);
+  if (!auth.authorized) {
+    return NextResponse.json({ error: 'UNAUTHORIZED', message: auth.reason }, { status: 401 });
   }
 
-  const body = await request.json();
-  const parsed = CameraCreateSchema.safeParse(body);
+  const raw: unknown = await request.json();
+  const parsed = CameraUpdateSchema.safeParse(raw);
   if (!parsed.success) {
     return NextResponse.json(
       { error: 'BAD_REQUEST', details: parsed.error.flatten() },
@@ -59,27 +39,25 @@ export async function POST(request: Request) {
     );
   }
 
-  const probeService = new StreamProbeService();
-  const probe =
-    parsed.data.status === 'ONLINE'
-      ? await probeService.probeHlsStream('new-cam', parsed.data.streamUrl)
-      : null;
+  const updated = await registry.updateCamera(params.id, parsed.data);
+  if (!updated) {
+    return NextResponse.json({ error: 'NOT_FOUND', message: 'Camera not found' }, { status: 404 });
+  }
+  return NextResponse.json(updated);
+}
 
-  const created = {
-    id: `cam-${Date.now()}`,
-    ...parsed.data,
-    streamStatus:
-      parsed.data.status === 'OFFLINE'
-        ? 'UNAVAILABLE'
-        : probe?.streamStatus ?? 'UNAVAILABLE',
-    streamPlayable:
-      parsed.data.status === 'OFFLINE' ? false : probe?.streamPlayable ?? false,
-    lastHeartbeatAt: parsed.data.status === 'ONLINE' ? new Date().toISOString() : null,
-    lastConnectedAt: parsed.data.status === 'ONLINE' ? new Date().toISOString() : null,
-    errorStatus: probe?.errorStatus ?? 'NONE',
-    errorMessage: probe?.errorMessage ?? null,
-    updatedAt: new Date().toISOString(),
-  };
+export async function DELETE(
+  request: Request,
+  { params }: { params: { id: string } }
+): Promise<NextResponse> {
+  const auth = verifyInternalApiKey(request);
+  if (!auth.authorized) {
+    return NextResponse.json({ error: 'UNAUTHORIZED', message: auth.reason }, { status: 401 });
+  }
 
-  return NextResponse.json(created, { status: 201 });
+  const deleted = await registry.deleteCamera(params.id);
+  if (!deleted) {
+    return NextResponse.json({ error: 'NOT_FOUND', message: 'Camera not found' }, { status: 404 });
+  }
+  return NextResponse.json({ deleted: true, id: params.id });
 }

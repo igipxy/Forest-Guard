@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ZodSchema, ZodError } from 'zod';
+import { ZodSchema, ZodError, ZodIssue } from 'zod';
 import { SystemLogger } from './logger';
 
 export async function validateRequestBody<T>(
@@ -8,14 +8,18 @@ export async function validateRequestBody<T>(
   endpoint: string
 ): Promise<{ data: T } | { errorResponse: NextResponse }> {
   try {
-    const raw = await request.json();
+    const raw: unknown = await request.json();
     const parsed = schema.parse(raw);
     return { data: parsed };
-  } catch (err) {
-    const message =
-      err instanceof ZodError
-        ? err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ')
-        : 'Malformed JSON request body';
+  } catch (err: unknown) {
+    let message = 'Malformed JSON request body';
+    if (err instanceof ZodError) {
+      message = err.issues
+        .map((issue: ZodIssue) => `${issue.path.join('.')}: ${issue.message}`)
+        .join('; ');
+    } else if (err instanceof Error) {
+      message = err.message;
+    }
 
     await SystemLogger.log({
       level: 'WARN',

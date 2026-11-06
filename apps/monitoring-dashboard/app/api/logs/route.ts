@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { SystemLogger } from '@/lib/logger';
-import { UserRole, SystemLogEntry } from '@fire-monitoring/shared';
+import { resolveServerAuthContext } from '@/lib/auth';
+import { SystemLogEntry, SystemLogRow } from '@fire-monitoring/shared';
 import { getServiceSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
-  const roleHeader = request.headers.get('X-User-Role') as UserRole | null;
-  const role: UserRole = roleHeader === 'ADMIN' ? 'ADMIN' : 'OPERATOR';
+  const authContext = await resolveServerAuthContext(request);
   const levelFilter = searchParams.get('level');
   const serviceFilter = searchParams.get('service');
 
@@ -21,31 +21,37 @@ export async function GET(request: Request) {
         .order('timestamp', { ascending: false })
         .limit(100);
 
-      if (levelFilter && levelFilter !== 'ALL') query = query.eq('level', levelFilter);
-      if (serviceFilter && serviceFilter !== 'ALL')
+      if (levelFilter && levelFilter !== 'ALL') {
+        query = query.eq('level', levelFilter);
+      }
+      if (serviceFilter && serviceFilter !== 'ALL') {
         query = query.eq('source_service', serviceFilter);
+      }
 
       const { data } = await query;
       if (data) {
-        logs = data.map((r) => ({
-          id: r.id,
-          timestamp: r.timestamp,
-          level: r.level,
-          httpStatus: r.http_status,
-          errorCategory: r.error_category,
-          message: r.message,
-          requestEndpoint: r.request_endpoint,
-          requestMethod: r.request_method,
-          sourceService: r.source_service,
-          stackTrace: r.stack_trace,
-        }));
+        const typedRows = data as SystemLogRow[];
+        logs = typedRows.map(
+          (r: SystemLogRow): SystemLogEntry => ({
+            id: r.id,
+            timestamp: r.timestamp,
+            level: r.level,
+            httpStatus: r.http_status,
+            errorCategory: r.error_category,
+            message: r.message,
+            requestEndpoint: r.request_endpoint,
+            requestMethod: r.request_method,
+            sourceService: r.source_service,
+            metadata: r.metadata,
+            stackTrace: r.stack_trace,
+          })
+        );
       }
     } catch {
-      // Fallback handled below
+      // Fallback empty array if DB unreachable
     }
   }
 
-  // Strip stackTrace if caller is OPERATOR
-  const sanitized = SystemLogger.sanitizeLogsForRole(logs, role);
-  return NextResponse.json({ role, logs: sanitized });
+  const sanitized = SystemLogger.sanitizeLogsForRole(logs, authContext.role);
+  return NextResponse.json({ role: authContext.role, logs: sanitized });
 }
