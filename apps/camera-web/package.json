@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 3001",
     "typecheck": "tsc --noEmit",
-    "lint": "next lint --no-cache"
+    "lint": "eslint . --ext .ts,.tsx --max-warnings=5"
   },
   "dependencies": {
     "@fire-monitoring/shared": "workspace:*",
