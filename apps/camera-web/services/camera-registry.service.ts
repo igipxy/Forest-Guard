@@ -115,6 +115,175 @@ export class CameraRegistryService {
     return this.mapRowToCamera(data as CameraRow);
   }
 
+  async registerCamera(input: {
+    name: string;
+    code: string;
+    location: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    status: 'ONLINE' | 'OFFLINE';
+    streamProtocol: 'HLS' | 'WEBRTC';
+    streamUrl: string;
+    isDemoStream: boolean;
+  }): Promise<CameraDevice> {
+    const nowIso = new Date().toISOString();
+    let streamStatus: StreamStatus = 'UNAVAILABLE';
+    let streamPlayable = false;
+    let errorStatus: CameraErrorCode = 'NONE';
+    let errorMessage: string | null = null;
+
+    if (input.status === 'ONLINE') {
+      const probe = await this.probeService.probeHlsStream('pending', input.streamUrl);
+      streamStatus = probe.streamStatus;
+      streamPlayable = probe.streamPlayable;
+      errorStatus = probe.errorStatus;
+      errorMessage = probe.errorMessage;
+    } else {
+      errorStatus = 'HARDWARE_FAULT';
+      errorMessage = 'Registered in OFFLINE state.';
+    }
+
+    if (isSupabaseConfigured()) {
+      const supabase = getServiceSupabase();
+      const { data, error } = await supabase
+        .from('cameras')
+        .insert({
+          name: input.name,
+          code: input.code,
+          location: input.location,
+          latitude: input.latitude ?? null,
+          longitude: input.longitude ?? null,
+          status: input.status,
+          stream_status: streamStatus,
+          stream_playable: streamPlayable,
+          stream_protocol: input.streamProtocol,
+          stream_url: input.streamUrl,
+          is_demo_stream: input.isDemoStream,
+          last_heartbeat_at: input.status === 'ONLINE' ? nowIso : null,
+          last_connected_at: input.status === 'ONLINE' ? nowIso : null,
+          error_status: errorStatus,
+          error_message: errorMessage,
+          updated_at: nowIso,
+        })
+        .select('*')
+        .single();
+
+      if (error || !data) {
+        throw new Error(`Supabase camera insert failed: ${error?.message}`);
+      }
+
+      const created = this.mapRowToCamera(data as CameraRow);
+      cameraEventBus.emit('CAMERA_REGISTERED', created);
+      return created;
+    }
+
+    const fallbackCamera: CameraDevice = {
+      id: `cam-${Date.now()}`,
+      name: input.name,
+      code: input.code,
+      location: input.location,
+      latitude: input.latitude ?? null,
+      longitude: input.longitude ?? null,
+      status: input.status,
+      streamStatus,
+      streamPlayable,
+      streamProtocol: input.streamProtocol,
+      streamUrl: input.streamUrl,
+      isDemoStream: true,
+      lastHeartbeatAt: input.status === 'ONLINE' ? nowIso : null,
+      lastConnectedAt: input.status === 'ONLINE' ? nowIso : null,
+      errorStatus,
+      errorMessage,
+      updatedAt: nowIso,
+    };
+
+    cameraEventBus.emit('CAMERA_REGISTERED', fallbackCamera);
+    return fallbackCamera;
+  }
+
+  async recordHeartbeat(
+    cameraId: string,
+    status: 'ONLINE' | 'OFFLINE',
+    streamUrlOverride?: string
+  ): Promise<CameraDevice> {
+    const nowIso = new Date().toISOString();
+    let targetStreamUrl = streamUrlOverride ?? '';
+
+    if (isSupabaseConfigured() && !targetStreamUrl) {
+      const supabase = getServiceSupabase();
+      const { data: existing } = await supabase
+        .from('cameras')
+        .select('stream_url')
+        .eq('id', cameraId)
+        .maybeSingle();
+
+      const typedExisting = existing as { stream_url?: string } | null;
+      targetStreamUrl = typedExisting?.stream_url ?? '';
+    }
+
+    const probe =
+      status === 'ONLINE' && targetStreamUrl
+        ? await this.probeService.probeHlsStream(cameraId, targetStreamUrl)
+        : {
+            streamStatus: 'UNAVAILABLE' as StreamStatus,
+            streamPlayable: false,
+            errorStatus: 'HARDWARE_FAULT' as CameraErrorCode,
+            errorMessage: 'Camera reported OFFLINE during heartbeat.',
+          };
+
+    if (isSupabaseConfigured()) {
+      const supabase = getServiceSupabase();
+      const { data, error } = await supabase
+        .from('cameras')
+        .update({
+          status,
+          ...(streamUrlOverride ? { stream_url: streamUrlOverride } : {}),
+          stream_status: probe.streamStatus,
+          stream_playable: probe.streamPlayable,
+          last_heartbeat_at: nowIso,
+          ...(status === 'ONLINE' ? { last_connected_at: nowIso } : {}),
+          error_status: probe.errorStatus,
+          error_message: probe.errorMessage,
+          updated_at: nowIso,
+        })
+        .eq('id', cameraId)
+        .select('*')
+        .single();
+
+      if (error || !data) {
+        throw new Error(`Failed to update heartbeat for camera ${cameraId}`);
+      }
+
+      const updated = this.mapRowToCamera(data as CameraRow);
+      cameraEventBus.emit('CAMERA_STATUS_UPDATED', updated);
+      return updated;
+    }
+
+    // In-memory / demo fallback when Supabase is not configured
+    const demoUpdated: CameraDevice = {
+      id: cameraId,
+      name: `Camera ${cameraId}`,
+      code: cameraId.toUpperCase(),
+      location: 'Sector A - North Pine Ridge',
+      latitude: null,
+      longitude: null,
+      status,
+      streamStatus: probe.streamStatus,
+      streamPlayable: probe.streamPlayable,
+      streamProtocol: 'HLS',
+      streamUrl: targetStreamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+      isDemoStream: true,
+      lastHeartbeatAt: nowIso,
+      lastConnectedAt: status === 'ONLINE' ? nowIso : null,
+      errorStatus: probe.errorStatus,
+      errorMessage: probe.errorMessage,
+      updatedAt: nowIso,
+    };
+
+    cameraEventBus.emit('CAMERA_STATUS_UPDATED', demoUpdated);
+    return demoUpdated;
+  }
+
   async updateCamera(
     cameraId: string,
     patch: Partial<{
@@ -163,7 +332,6 @@ export class CameraRegistryService {
     return true;
   }
 
-  // ... registerCamera and recordHeartbeat preserved with CameraRow typing ...
   private mapRowToCamera(row: CameraRow): CameraDevice {
     return {
       id: String(row.id),
