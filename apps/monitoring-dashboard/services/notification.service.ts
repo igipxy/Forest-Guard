@@ -1,6 +1,7 @@
 import {
   AlertCategory,
   AlertLifecycleStatus,
+  AlertRow,
   AlertSeverity,
   SystemAlert,
 } from '@fire-monitoring/shared';
@@ -20,6 +21,27 @@ export interface CreateAlertInput {
 export class NotificationService {
   private static inMemoryAlerts = new Map<string, SystemAlert>();
 
+  /**
+   * Backwards-compatible wrapper so callers using createAlert(...) work seamlessly
+   * while still benefiting from deduplication.
+   */
+  async createAlert(
+    input: Omit<CreateAlertInput, 'dedupKey'> & { dedupKey?: string }
+  ): Promise<SystemAlert> {
+    const resolvedDedupKey =
+      input.dedupKey ??
+      `${input.category}:${input.relatedCameraId ?? input.location ?? input.title}`;
+
+    const result = await this.createOrDeduplicateAlert({
+      ...input,
+      dedupKey: resolvedDedupKey,
+    });
+    return result.alert;
+  }
+
+  /**
+   * Primary alert creation method with active deduplication (CREATED / ACKNOWLEDGED).
+   */
   async createOrDeduplicateAlert(input: CreateAlertInput): Promise<{
     alert: SystemAlert;
     wasDeduplicated: boolean;
@@ -30,7 +52,7 @@ export class NotificationService {
       try {
         const supabase = getServiceSupabase();
 
-        // 1. Check for an existing active alert (CREATED or ACKNOWLEDGED) with the same dedup_key
+        // 1. Check for an existing active alert with the same dedup_key
         const { data: existing } = await supabase
           .from('alerts')
           .select('*')
@@ -41,7 +63,9 @@ export class NotificationService {
           .maybeSingle();
 
         if (existing) {
-          const nextCount = Number(existing.occurrence_count || 1) + 1;
+          const typedExisting = existing as AlertRow;
+          const nextCount = Number(typedExisting.occurrence_count || 1) + 1;
+
           const { data: updated } = await supabase
             .from('alerts')
             .update({
@@ -50,12 +74,12 @@ export class NotificationService {
               description: input.description,
               severity: input.severity,
             })
-            .eq('id', existing.id)
+            .eq('id', typedExisting.id)
             .select('*')
             .single();
 
           return {
-            alert: this.mapRowToAlert(updated || existing),
+            alert: this.mapRowToAlert((updated as AlertRow | null) ?? typedExisting),
             wasDeduplicated: true,
           };
         }
@@ -80,10 +104,10 @@ export class NotificationService {
 
         if (error || !inserted) throw error;
         return {
-          alert: this.mapRowToAlert(inserted),
+          alert: this.mapRowToAlert(inserted as AlertRow),
           wasDeduplicated: false,
         };
-      } catch (err) {
+      } catch (err: unknown) {
         await SystemLogger.log({
           level: 'ERROR',
           httpStatus: 500,
@@ -98,7 +122,7 @@ export class NotificationService {
 
     // In-memory deduplication fallback when running without Supabase
     const existingMem = Array.from(NotificationService.inMemoryAlerts.values()).find(
-      (a) =>
+      (a: SystemAlert) =>
         a.dedupKey === input.dedupKey &&
         (a.status === 'CREATED' || a.status === 'ACKNOWLEDGED')
     );
@@ -135,6 +159,15 @@ export class NotificationService {
       createdAt: nowIso,
     };
     NotificationService.inMemoryAlerts.set(createdMem.id, createdMem);
+
+    if (
+      process.env.TELEGRAM_BOT_TOKEN &&
+      process.env.TELEGRAM_CHAT_ID &&
+      createdMem.severity === 'CRITICAL'
+    ) {
+      await this.dispatchTelegramNotification(createdMem);
+    }
+
     return { alert: createdMem, wasDeduplicated: false };
   }
 
@@ -170,7 +203,7 @@ export class NotificationService {
         .single();
 
       if (error || !data) return null;
-      return this.mapRowToAlert(data);
+      return this.mapRowToAlert(data as AlertRow);
     }
 
     const existing = NotificationService.inMemoryAlerts.get(alertId);
@@ -193,14 +226,35 @@ export class NotificationService {
     NotificationService.inMemoryAlerts.clear();
   }
 
-  private mapRowToAlert(row: Record<string, any>): SystemAlert {
+  private async dispatchTelegramNotification(alert: SystemAlert): Promise<void> {
+    const endpoint = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+    try {
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: process.env.TELEGRAM_CHAT_ID,
+          text: `[${alert.severity}] ${alert.title}\n${alert.description}`,
+        }),
+      });
+    } catch {
+      await SystemLogger.log({
+        level: 'WARN',
+        errorCategory: 'BACKGROUND_JOB_FAILURE',
+        message: 'Failed to dispatch Telegram notification webhook',
+        sourceService: 'NotificationService',
+      });
+    }
+  }
+
+  private mapRowToAlert(row: AlertRow): SystemAlert {
     return {
       id: String(row.id),
-      dedupKey: String(row.dedup_key || row.id),
+      dedupKey: String(row.dedup_key ?? row.id),
       title: String(row.title),
       severity: row.severity,
       category: row.category,
-      status: row.status || (row.acknowledged ? 'ACKNOWLEDGED' : 'CREATED'),
+      status: row.status ?? (row.acknowledged ? 'ACKNOWLEDGED' : 'CREATED'),
       occurrenceCount: Number(row.occurrence_count || 1),
       lastSeenAt: row.last_seen_at || row.created_at,
       description: String(row.description),
