@@ -130,7 +130,7 @@ export class NotificationService {
     if (existingMem) {
       const updatedMem: SystemAlert = {
         ...existingMem,
-        occurrenceCount: existingMem.occurrenceCount + 1,
+        occurrenceCount: (existingMem.occurrenceCount ?? 1) + 1,
         lastSeenAt: nowIso,
         description: input.description,
         severity: input.severity,

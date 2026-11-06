@@ -1,4 +1,4 @@
-import { SystemLogEntry, LogLevel, UserRole } from '@fire-monitoring/shared';
+import { SystemLogEntry, UserRole } from '@fire-monitoring/shared';
 import { getServiceSupabase } from './supabase';
 
 const SENSITIVE_PATTERNS = [
@@ -6,7 +6,7 @@ const SENSITIVE_PATTERNS = [
   /(api[_-]?key|secret|password|token)["'\s:=]+["']?[a-zA-Z0-9_\-\.]+["']?/gi,
 ];
 
-function sanitizeText(input?: string): string | undefined {
+function sanitizeText(input?: string | null): string | undefined {
   if (!input) return undefined;
   return SENSITIVE_PATTERNS.reduce(
     (acc, regex) => acc.replace(regex, '$1[REDACTED]'),
@@ -31,8 +31,7 @@ export class SystemLogger {
         source_service: entry.sourceService,
         stack_trace: sanitizedStack ?? null,
       });
-    } catch (dbErr) {
-      // Fallback to stderr if database connection itself failed
+    } catch (dbErr: unknown) {
       console.error('[CRITICAL_LOGGER_FALLBACK]', {
         originalError: sanitizedMessage,
         dbError: dbErr instanceof Error ? dbErr.message : 'Unknown DB failure',
@@ -42,6 +41,6 @@ export class SystemLogger {
 
   static sanitizeLogsForRole(logs: SystemLogEntry[], role: UserRole): SystemLogEntry[] {
     if (role === 'ADMIN') return logs;
-    return logs.map(({ stackTrace, ...safeLog }) => safeLog);
+    return logs.map(({ stackTrace: _stackTrace, ...safeLog }) => safeLog);
   }
 }
