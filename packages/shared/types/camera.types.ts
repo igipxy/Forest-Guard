@@ -24,8 +24,8 @@ export interface CameraDevice {
   streamStatus: StreamStatus;
   streamPlayable: boolean;
   streamProtocol: StreamProtocol;
-  streamUrl: string; // Redacted in public API responses if credentials exist
-  isDemoStream: boolean;
+  streamUrl: string;
+  isDemoStream?: boolean;
   lastHeartbeatAt: string | null;
   lastConnectedAt: string | null;
   errorStatus: CameraErrorCode;
@@ -40,7 +40,7 @@ export interface StreamProbeResult {
   streamPlayable: boolean;
   httpStatus: number | null;
   hasExtM3uHeader: boolean;
-  hasPlayableSegments: boolean;
+  hasPlayableSegments?: boolean;
   latencyMs: number;
   errorStatus: CameraErrorCode;
   errorMessage: string | null;

@@ -5,9 +5,9 @@ export type RiskClassification = 'VERY_LOW' | 'LOW' | 'MODERATE' | 'HIGH' | 'EXT
 export interface ContributingFactor {
   parameter: string;
   value: string;
-  weight: number; // Effective normalized weight (0 - 1)
+  weight: number;
   contributionScore: number;
-  isAvailable: boolean;
+  isAvailable?: boolean;
   impactLevel: 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL' | 'UNAVAILABLE';
 }
 
@@ -15,11 +15,11 @@ export interface FireRiskPrediction {
   id: string;
   weatherRecordId: string;
   location: string;
-  riskScore: number; // 0 - 100
+  riskScore: number;
   classification: RiskClassification;
   modelVersion: string;
   isHeuristic: boolean;
-  dataSource: WeatherDataSource;
+  dataSource?: WeatherDataSource;
   disclaimer: string;
   contributingFactors: ContributingFactor[];
   vulnerableAreas: string[];
@@ -40,6 +40,6 @@ export interface DailyFireRiskReport {
   vulnerableAreas: string[];
   riskFactorAnalysis: string;
   recommendedActions: string[];
-  recordCount: number;
+  recordCount?: number;
   generatedAt: string;
 }

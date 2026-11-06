@@ -6,8 +6,7 @@
       "@/*": ["./*"],
       "@fire-monitoring/shared": ["../../packages/shared/index.ts"]
     },
-    "plugins": [{ "name": "next" }],
-    "types": ["node", "react", "react-dom"]
+    "plugins": [{ "name": "next" }]
   },
   "include": [
     "next-env.d.ts",

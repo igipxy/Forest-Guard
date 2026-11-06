@@ -10,9 +10,9 @@ export interface WeatherData {
   locationName: string;
   temperatureC: number | null;
   windSpeedKmh: number | null;
-  pressureHpa: number | null; // Nullable when BMKG endpoint omits atmospheric pressure
-  uvIndex: number | null; // Nullable when BMKG endpoint omits UV index
-  solarRadiationWm2: number | null; // Nullable when BMKG endpoint omits solar radiation
+  pressureHpa: number | null;
+  uvIndex: number | null;
+  solarRadiationWm2: number | null;
   precipitationMm: number | null;
   lastRainfallAt: string | null;
   humidityPct: number | null;
