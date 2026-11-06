@@ -4,7 +4,10 @@
     "baseUrl": ".",
     "paths": {
       "@fire-monitoring/shared": ["./packages/shared/index.ts"],
-      "@/*": ["./apps/monitoring-dashboard/*"]
+      "@/*": [
+        "./apps/monitoring-dashboard/*",
+        "./apps/camera-web/*"
+      ]
     }
   },
   "include": [
