@@ -1,11 +1,14 @@
+import { WeatherDataSource } from './weather.types';
+
 export type RiskClassification = 'VERY_LOW' | 'LOW' | 'MODERATE' | 'HIGH' | 'EXTREME';
 
 export interface ContributingFactor {
   parameter: string;
   value: string;
-  weight: number;
+  weight: number; // Effective normalized weight (0 - 1)
   contributionScore: number;
-  impactLevel: 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  isAvailable: boolean;
+  impactLevel: 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL' | 'UNAVAILABLE';
 }
 
 export interface FireRiskPrediction {
@@ -16,6 +19,7 @@ export interface FireRiskPrediction {
   classification: RiskClassification;
   modelVersion: string;
   isHeuristic: boolean;
+  dataSource: WeatherDataSource;
   disclaimer: string;
   contributingFactors: ContributingFactor[];
   vulnerableAreas: string[];
@@ -25,10 +29,10 @@ export interface FireRiskPrediction {
 export interface DailyFireRiskReport {
   id: string;
   reportDate: string;
-  maxTemperatureC: number;
-  avgWindSpeedKmh: number;
-  totalPrecipitationMm: number;
-  avgHumidityPct: number;
+  maxTemperatureC: number | null;
+  avgWindSpeedKmh: number | null;
+  totalPrecipitationMm: number | null;
+  avgHumidityPct: number | null;
   lastRainfallAt: string | null;
   dailyRiskScore: number;
   riskClassification: RiskClassification;
@@ -36,5 +40,6 @@ export interface DailyFireRiskReport {
   vulnerableAreas: string[];
   riskFactorAnalysis: string;
   recommendedActions: string[];
+  recordCount: number;
   generatedAt: string;
 }

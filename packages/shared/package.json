@@ -2,17 +2,25 @@
   "name": "@fire-monitoring/shared",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "main": "./index.ts",
   "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
   "scripts": {
-    "build": "tsc --noEmit",
-    "typecheck": "tsc --noEmit",
-    "lint": "echo 'Shared package lint OK'"
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/node": "^22.8.6",
     "typescript": "^5.6.3"
   }
 }

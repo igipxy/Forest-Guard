@@ -2,85 +2,190 @@ import {
   IFireRiskModel,
   WeatherData,
   FireRiskPrediction,
-  RiskClassification,
   ContributingFactor,
+  classifyFireRiskScore,
+  FIRE_RISK_WEIGHTS,
+  HEURISTIC_FIRE_RISK_DISCLAIMER,
 } from '@fire-monitoring/shared';
 
 export class RuleBasedFireRiskModel implements IFireRiskModel {
-  public readonly modelVersion = 'heuristic-v1.2.0';
+  public readonly modelVersion = 'heuristic-v1.3.0';
   public readonly isHeuristic = true;
 
   evaluate(
     weather: WeatherData,
-    historicalDryDays: number
+    historicalDryDays?: number | null
   ): Omit<FireRiskPrediction, 'id' | 'predictedAt'> {
-    // 1. Temperature Sub-score (Weight: 25%) - 20°C = 0, 42°C+ = 100
-    const tempNormalized = Math.min(100, Math.max(0, ((weather.temperatureC - 20) / 22) * 100));
-    const tempContribution = Math.round(tempNormalized * 0.25);
+    // 1. Compute raw normalized sub-scores (0-100) only for available parameters
+    const tempAvailable =
+      weather.temperatureC !== null && Number.isFinite(weather.temperatureC);
+    const tempNorm = tempAvailable
+      ? Math.min(100, Math.max(0, (((weather.temperatureC as number) - 20) / 22) * 100))
+      : 0;
 
-    // 2. Relative Humidity Inverse Sub-score (Weight: 25%) - 85% = 0, 15% = 100
-    const humidityNormalized = Math.min(100, Math.max(0, ((85 - weather.humidityPct) / 70) * 100));
-    const humidityContribution = Math.round(humidityNormalized * 0.25);
+    const humAvailable =
+      weather.humidityPct !== null && Number.isFinite(weather.humidityPct);
+    const humNorm = humAvailable
+      ? Math.min(100, Math.max(0, ((85 - (weather.humidityPct as number)) / 70) * 100))
+      : 0;
 
-    // 3. Wind Speed Sub-score (Weight: 20%) - 0 km/h = 0, 45+ km/h = 100
-    const windNormalized = Math.min(100, Math.max(0, (weather.windSpeedKmh / 45) * 100));
-    const windContribution = Math.round(windNormalized * 0.20);
+    const windAvailable =
+      weather.windSpeedKmh !== null && Number.isFinite(weather.windSpeedKmh);
+    const windNorm = windAvailable
+      ? Math.min(100, Math.max(0, ((weather.windSpeedKmh as number) / 45) * 100))
+      : 0;
 
-    // 4. Drought / Days Since Rainfall Sub-score (Weight: 20%) - 0 days = 0, 14+ days = 100
-    const rainPenalty = weather.precipitationMm > 2.0 ? 0.25 : 1.0;
-    const droughtNormalized =
-      Math.min(100, Math.max(0, (historicalDryDays / 14) * 100)) * rainPenalty;
-    const droughtContribution = Math.round(droughtNormalized * 0.20);
+    // Resolve dry days: explicit argument -> derived from lastRainfallAt -> neutral default (5 days) if history missing
+    const resolvedDryDays =
+      typeof historicalDryDays === 'number' && Number.isFinite(historicalDryDays)
+        ? Math.max(0, historicalDryDays)
+        : weather.lastRainfallAt
+        ? Math.max(
+            0,
+            Math.floor(
+              (new Date(weather.recordedAt).getTime() -
+                new Date(weather.lastRainfallAt).getTime()) /
+                86_400_000
+            )
+          )
+        : null;
 
-    // 5. Solar Radiation / UV Index Sub-score (Weight: 10%) - UV 0 = 0, UV 11+ = 100
-    const uvNormalized = Math.min(100, Math.max(0, (weather.uvIndex / 11) * 100));
-    const uvContribution = Math.round(uvNormalized * 0.10);
+    const rainMm = weather.precipitationMm ?? 0;
+    const rainDamping = rainMm > 2.0 ? 0.25 : 1.0;
+    const effectiveDryDays = resolvedDryDays ?? 5; // Neutral conservative baseline when rainfall history is absent
+    const droughtNorm =
+      Math.min(100, Math.max(0, (effectiveDryDays / 14) * 100)) * rainDamping;
+    const droughtAvailable =
+      resolvedDryDays !== null || weather.precipitationMm !== null;
 
-    const rawScore =
+    const uvAvailable = weather.uvIndex !== null && Number.isFinite(weather.uvIndex);
+    const uvNorm = uvAvailable
+      ? Math.min(100, Math.max(0, ((weather.uvIndex as number) / 11) * 100))
+      : 0;
+
+    // Calculate active weight sum so missing optional sensors (e.g., UV) don't artificially cap risk at 90
+    const rawWeights = {
+      temp: tempAvailable ? FIRE_RISK_WEIGHTS.TEMPERATURE : 0,
+      hum: humAvailable ? FIRE_RISK_WEIGHTS.HUMIDITY : 0,
+      wind: windAvailable ? FIRE_RISK_WEIGHTS.WIND_SPEED : 0,
+      drought: droughtAvailable ? FIRE_RISK_WEIGHTS.DRY_SPELL : 0,
+      uv: uvAvailable ? FIRE_RISK_WEIGHTS.UV_INDEX : 0,
+    };
+
+    const activeWeightSum =
+      rawWeights.temp +
+      rawWeights.hum +
+      rawWeights.wind +
+      rawWeights.drought +
+      rawWeights.uv;
+
+    const scale = activeWeightSum > 0 ? 1 / activeWeightSum : 0;
+
+    const wTemp = Number((rawWeights.temp * scale).toFixed(4));
+    const wHum = Number((rawWeights.hum * scale).toFixed(4));
+    const wWind = Number((rawWeights.wind * scale).toFixed(4));
+    const wDrought = Number((rawWeights.drought * scale).toFixed(4));
+    const wUv = Number((rawWeights.uv * scale).toFixed(4));
+
+    const tempContribution = Math.round(tempNorm * wTemp);
+    const humContribution = Math.round(humNorm * wHum);
+    const windContribution = Math.round(windNorm * wWind);
+    const droughtContribution = Math.round(droughtNorm * wDrought);
+    const uvContribution = Math.round(uvNorm * wUv);
+
+    const sumContributions =
       tempContribution +
-      humidityContribution +
+      humContribution +
       windContribution +
       droughtContribution +
       uvContribution;
 
-    const riskScore = Math.min(100, Math.max(0, rawScore));
-    const classification = this.classifyScore(riskScore);
+    const riskScore = Math.min(100, Math.max(0, sumContributions));
+    const classification = classifyFireRiskScore(riskScore);
 
     const contributingFactors: ContributingFactor[] = [
       {
-        parameter: 'Relative Humidity',
-        value: `${weather.humidityPct.toFixed(1)}%`,
-        weight: 0.25,
-        contributionScore: humidityContribution,
-        impactLevel: humidityNormalized > 75 ? 'CRITICAL' : humidityNormalized > 50 ? 'HIGH' : 'MODERATE',
+        parameter: 'Ambient Temperature',
+        value: tempAvailable ? `${weather.temperatureC!.toFixed(1)} °C` : 'Unavailable',
+        weight: FIRE_RISK_WEIGHTS.TEMPERATURE,
+        contributionScore: tempContribution,
+        isAvailable: tempAvailable,
+        impactLevel: !tempAvailable
+          ? 'UNAVAILABLE'
+          : tempNorm > 75
+          ? 'CRITICAL'
+          : tempNorm > 50
+          ? 'HIGH'
+          : tempNorm > 25
+          ? 'MODERATE'
+          : 'LOW',
       },
       {
-        parameter: 'Ambient Temperature',
-        value: `${weather.temperatureC.toFixed(1)} °C`,
-        weight: 0.25,
-        contributionScore: tempContribution,
-        impactLevel: tempNormalized > 75 ? 'CRITICAL' : tempNormalized > 50 ? 'HIGH' : 'MODERATE',
+        parameter: 'Relative Humidity',
+        value: humAvailable ? `${weather.humidityPct!.toFixed(1)}%` : 'Unavailable',
+        weight: FIRE_RISK_WEIGHTS.HUMIDITY,
+        contributionScore: humContribution,
+        isAvailable: humAvailable,
+        impactLevel: !humAvailable
+          ? 'UNAVAILABLE'
+          : humNorm > 75
+          ? 'CRITICAL'
+          : humNorm > 50
+          ? 'HIGH'
+          : humNorm > 25
+          ? 'MODERATE'
+          : 'LOW',
+      },
+      {
+        parameter: 'Wind Speed',
+        value: windAvailable ? `${weather.windSpeedKmh!.toFixed(1)} km/h` : 'Unavailable',
+        weight: FIRE_RISK_WEIGHTS.WIND_SPEED,
+        contributionScore: windContribution,
+        isAvailable: windAvailable,
+        impactLevel: !windAvailable
+          ? 'UNAVAILABLE'
+          : windNorm > 70
+          ? 'CRITICAL'
+          : windNorm > 45
+          ? 'HIGH'
+          : windNorm > 20
+          ? 'MODERATE'
+          : 'LOW',
       },
       {
         parameter: 'Dry Spell Duration',
-        value: `${historicalDryDays} days (${weather.precipitationMm.toFixed(1)} mm rain)`,
-        weight: 0.20,
+        value:
+          resolvedDryDays !== null
+            ? `${resolvedDryDays} days (${rainMm.toFixed(1)} mm rain)`
+            : `History Unavailable (${rainMm.toFixed(1)} mm rain)`,
+        weight: FIRE_RISK_WEIGHTS.DRY_SPELL,
         contributionScore: droughtContribution,
-        impactLevel: droughtNormalized > 75 ? 'CRITICAL' : droughtNormalized > 45 ? 'HIGH' : 'LOW',
+        isAvailable: droughtAvailable,
+        impactLevel: !droughtAvailable
+          ? 'UNAVAILABLE'
+          : droughtNorm > 75
+          ? 'CRITICAL'
+          : droughtNorm > 45
+          ? 'HIGH'
+          : droughtNorm > 20
+          ? 'MODERATE'
+          : 'LOW',
       },
       {
-        parameter: 'Wind Velocity',
-        value: `${weather.windSpeedKmh.toFixed(1)} km/h`,
-        weight: 0.20,
-        contributionScore: windContribution,
-        impactLevel: windNormalized > 70 ? 'CRITICAL' : windNormalized > 45 ? 'HIGH' : 'LOW',
-      },
-      {
-        parameter: 'UV & Solar Radiation',
-        value: `UV ${weather.uvIndex.toFixed(1)} (${weather.solarRadiationWm2} W/m²)`,
-        weight: 0.10,
+        parameter: 'UV Index',
+        value: uvAvailable ? `UV ${weather.uvIndex!.toFixed(1)}` : 'Unavailable',
+        weight: FIRE_RISK_WEIGHTS.UV_INDEX,
         contributionScore: uvContribution,
-        impactLevel: uvNormalized > 75 ? 'HIGH' : 'MODERATE',
+        isAvailable: uvAvailable,
+        impactLevel: !uvAvailable
+          ? 'UNAVAILABLE'
+          : uvNorm > 75
+          ? 'CRITICAL'
+          : uvNorm > 50
+          ? 'HIGH'
+          : uvNorm > 25
+          ? 'MODERATE'
+          : 'LOW',
       },
     ];
 
@@ -91,19 +196,11 @@ export class RuleBasedFireRiskModel implements IFireRiskModel {
       classification,
       modelVersion: this.modelVersion,
       isHeuristic: this.isHeuristic,
-      disclaimer:
-        'Heuristic Weather-Based Risk Indicator: This score represents environmental susceptibility to fire ignition/spread, NOT confirmed optical or thermal fire detection.',
+      dataSource: weather.dataSource,
+      disclaimer: HEURISTIC_FIRE_RISK_DISCLAIMER,
       contributingFactors,
       vulnerableAreas: this.identifyVulnerableZones(riskScore),
     };
-  }
-
-  private classifyScore(score: number): RiskClassification {
-    if (score <= 20) return 'VERY_LOW';
-    if (score <= 40) return 'LOW';
-    if (score <= 60) return 'MODERATE';
-    if (score <= 80) return 'HIGH';
-    return 'EXTREME';
   }
 
   private identifyVulnerableZones(score: number): string[] {
@@ -136,17 +233,10 @@ export class FireRiskEngineService {
     this.model = nextModel;
   }
 
-  public computeRisk(weather: WeatherData): FireRiskPrediction {
-    const dryDays = weather.lastRainfallAt
-      ? Math.max(
-          0,
-          Math.floor((Date.now() - new Date(weather.lastRainfallAt).getTime()) / 86400000)
-        )
-      : 7;
-
-    const result = this.model.evaluate(weather, dryDays);
+  public computeRisk(weather: WeatherData, overrideDryDays?: number | null): FireRiskPrediction {
+    const evaluated = this.model.evaluate(weather, overrideDryDays);
     return {
-      ...result,
+      ...evaluated,
       id: `pred-${Date.now()}`,
       predictedAt: new Date().toISOString(),
     };

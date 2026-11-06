@@ -1,12 +1,15 @@
 export type CameraStatus = 'ONLINE' | 'OFFLINE';
-export type StreamStatus = 'PLAYABLE' | 'UNAVAILABLE';
+export type StreamStatus = 'PLAYABLE' | 'UNAVAILABLE' | 'CHECKING';
 export type StreamProtocol = 'HLS' | 'WEBRTC';
 
 export type CameraErrorCode =
   | 'NONE'
   | 'STREAM_UNREACHABLE'
   | 'INVALID_MANIFEST'
+  | 'SEGMENT_ERROR'
   | 'TIMEOUT'
+  | 'HTTP_500'
+  | 'HEARTBEAT_EXPIRED'
   | 'AUTH_ERROR'
   | 'HARDWARE_FAULT';
 
@@ -21,7 +24,7 @@ export interface CameraDevice {
   streamStatus: StreamStatus;
   streamPlayable: boolean;
   streamProtocol: StreamProtocol;
-  streamUrl: string;
+  streamUrl: string; // Redacted in public API responses if credentials exist
   isDemoStream: boolean;
   lastHeartbeatAt: string | null;
   lastConnectedAt: string | null;
@@ -37,6 +40,7 @@ export interface StreamProbeResult {
   streamPlayable: boolean;
   httpStatus: number | null;
   hasExtM3uHeader: boolean;
+  hasPlayableSegments: boolean;
   latencyMs: number;
   errorStatus: CameraErrorCode;
   errorMessage: string | null;
